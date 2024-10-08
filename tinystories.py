@@ -172,6 +172,10 @@ def pretokenize(vocab_size):
     print("Done.")
 
 
+
+
+
+
 class PretokDataset(torch.utils.data.IterableDataset):
     """Loads pretokenized examples from disk and yields them as PyTorch tensors."""
 
@@ -194,7 +198,7 @@ class PretokDataset(torch.utils.data.IterableDataset):
         print(f"Created a PretokDataset with rng seed {seed}")
         if self.vocab_source == "llama2":
             # the .bin files are right along the .json files
-            bin_dir = os.path.join(DATA_CACHE_DIR, "TinyStories_all_data")
+            bin_dir = os.path.join(DATA_CACHE_DIR, "kftt")
             shard_filenames = sorted(glob.glob(os.path.join(bin_dir, "*.bin")))
         elif self.vocab_source == "custom":
             # the .bin files are in tok{N} directory
@@ -203,6 +207,7 @@ class PretokDataset(torch.utils.data.IterableDataset):
         # train/test split. let's use only shard 0 for test split, rest train
         shard_filenames = shard_filenames[1:] if self.split == "train" else shard_filenames[:1]
         assert len(shard_filenames)>0, f"No bin files found in {bin_dir}"
+        
         while True:
             rng.shuffle(shard_filenames)
             for shard in shard_filenames:
@@ -220,6 +225,10 @@ class PretokDataset(torch.utils.data.IterableDataset):
                     chunk = torch.from_numpy((m[start:end]).astype(np.int64))
                     x = chunk[:-1]
                     y = chunk[1:]
+                    print(chunk)
+                    print(x)
+                    print(y)
+                    exit()
                     yield x, y
 
 # -----------------------------------------------------------------------------
@@ -234,17 +243,49 @@ def get_tokenizer_model_path(vocab_size):
     if vocab_size == 0:
         return None
     else:
-        return os.path.join(DATA_CACHE_DIR, f"tok{vocab_size}.model")
+        return os.path.join(DATA_CACHE_DIR,'kftt', f"tok{vocab_size}.model")
 
+from torchtext.vocab import Vocab
+from utils.text.vocab import BOS, EOS, PAD, UNK, tokenize_sentence
+from const.path import (
+    FIGURE_PATH,
+    JPARA_TOK_CORPUS_PATH,
+    KFTT_TOK_CORPUS_PATH,
+    NN_MODEL_PICKLES_PATH,
+    TANAKA_CORPUS_PATH,
+)
+from utils.text.vocab import get_vocab
+from os.path import join
+from utils.text.text import  text_to_tensor
+from utils.dataset.Dataset import KfttDataset
+TRAIN_SRC_CORPUS_PATH = join(JPARA_TOK_CORPUS_PATH, "en.txt")
+TRAIN_TGT_CORPUS_PATH = join(JPARA_TOK_CORPUS_PATH, "ja.txt")
+
+#TRAIN_SRC_CORPUS_PATH = join(JPARA_TOK_CORPUS_PATH, "en.txt")
+#TRAIN_TGT_CORPUS_PATH = join(JPARA_TOK_CORPUS_PATH, "ja.txt")
+src_vocab = get_vocab(TRAIN_SRC_CORPUS_PATH, vocab_size=20000)
+tgt_vocab = get_vocab(TRAIN_TGT_CORPUS_PATH, vocab_size=20000)
+def src_text_to_tensor(text: str, max_len: int) -> torch.Tensor:
+    return text_to_tensor(text, src_vocab, max_len, eos=False, bos=False)
+
+def tgt_text_to_tensor(text: str, max_len: int) -> torch.Tensor:
+    return text_to_tensor(text, tgt_vocab, max_len)
 class Task:
-
     @staticmethod
-    def iter_batches(batch_size, device, num_workers=0, **dataset_kwargs):
-        ds = PretokDataset(**dataset_kwargs)
+    def iter_batches(batch_size, device, max_len=256,num_workers=0, **dataset_kwargs):
+        
+        train_dataset = KfttDataset(
+            TRAIN_SRC_CORPUS_PATH,
+            TRAIN_TGT_CORPUS_PATH,
+            max_len,
+            src_text_to_tensor,
+            tgt_text_to_tensor,
+        )
         dl = torch.utils.data.DataLoader(
-            ds, batch_size=batch_size, pin_memory=True, num_workers=num_workers
+            train_dataset, batch_size=batch_size, pin_memory=True, num_workers=num_workers
         )
         for x, y in dl:
+            #print(x)
             x = x.to(device, non_blocking=True)
             y = y.to(device, non_blocking=True)
             yield x, y
